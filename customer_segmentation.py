@@ -1,20 +1,27 @@
 #import the dataset
+import numpy as np
+import pandas as pd
+from pyspark.sql.functions import unix_timestamp, from_unixtime, to_date
+from pyspark.sql.window import Window
+from pyspark.sql.functions import rank, dense_rank
+from pyspark.sql.functions import unix_timestamp, from_unixtime, to_date
+from pyspark.sql import functions as F
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.feature import MinMaxScaler
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import ClusteringEvaluator
+import pylab as pl
 data = spark.read.csv("dbfs:/FileStore/tables/joined_cust_sales-3.csv", inferSchema = True, header = True, sep = ",").cache()
 
 #check the data type of each feature
 data.printSchema()
-
-from pyspark.sql.functions import unix_timestamp, from_unixtime, to_date
 data = data.withColumn('new_purchase_date', to_date(unix_timestamp('purchase_date', 'yyyy/MM/dd').cast("timestamp"))).drop('purchase_date')
 
 #sort by cust and purchase date
 data = data.orderBy(["cust", "new_purchase_date"], ascending=True)
 
 #create flag of the i-th number of purchase (1st time, 2nd time, etc.) as a new feature
-from pyspark.sql.window import Window
-from pyspark.sql.functions import rank, dense_rank
-from pyspark.sql.functions import unix_timestamp, from_unixtime, to_date
-
 window = Window.partitionBy(data['cust']).orderBy(data['new_purchase_date'])
 data = data.select('*', rank().over(window).alias('flag'))
 
@@ -22,7 +29,6 @@ data = data.select('*', rank().over(window).alias('flag'))
 resultsumtotal = data.groupBy('cust').sum('total_spending').select('cust','sum(total_spending)')
 
 #create a new feature, the number of visit per customer
-from pyspark.sql import functions as F
 w = Window.partitionBy('cust')
 data = data.withColumn('visit', F.max('flag').over(w)).where(F.col('flag') == F.col('visit')).drop('visit')
 
@@ -45,10 +51,6 @@ pipeline = Pipeline(stages=stages)
 data3 = pipeline.fit(data2).transform(data2)
 
 #build a pipeline of vectorassembler and minmaxscaler
-from pyspark.ml import Pipeline
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.feature import MinMaxScaler
-
 assemblerInputs = ["cust_vec", "address_vec", "gender_vec", "status_vec", "ocupation_vec", "flag_vec", "age", "sum(total_spending)"]
 
 vectorAssembler = VectorAssembler(inputCols = assemblerInputs, outputCol="assembler")
@@ -64,11 +66,7 @@ pipeline2 = Pipeline().setStages([
 dataready = pipeline2.fit(data3).transform(data3)
 
 # Calculate cost and plot from the elbow method to define the optimum number of clusters
-import numpy as np
-import pandas as pd
-from pyspark.ml.clustering import KMeans
 cost = np.zeros(10)
-
 for k in range(2,10):
     kmeans = KMeans().setK(k).setSeed(1).setFeaturesCol('features')
     model = kmeans.fit(dataready)
@@ -88,8 +86,6 @@ pl.title('Elbow Curve')
 pl.show()
 
 #according to the elbow method, our optimum number of clusters is 3
-from pyspark.ml.clustering import KMeans
-from pyspark.ml.evaluation import ClusteringEvaluator
 kmeans = KMeans().setK(3).setSeed(123)
 model = kmeans.fit(dataready.select('features'))
 predictions = model.transform(dataready)
